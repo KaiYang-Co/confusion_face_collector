@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>面部困惑数据采集器</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header id="pageHeader">
+        <p class="eyebrow">FACE-ONLY DATA COLLECTION</p>
+        <h1>面部困惑数据采集器</h1>
+        <p class="subtitle">
+          研究者先设置文章和选择题；确认后，测试者只能阅读、作答和按空格标记困惑。
+        </p>
+      </header>
+
+      <section id="experimentSetup">
+        <section class="panel setup-panel">
+          <div class="field">
+            <label for="subjectId">被试编号</label>
+            <input id="subjectId" autocomplete="off" placeholder="例如 S01" />
+          </div>
+          <div class="field">
+            <label for="readingId">阅读任务</label>
+            <input id="readingId" autocomplete="off" placeholder="例如 Text01" />
+          </div>
+          <div class="field field-wide">
+            <label for="notes">备注（可选）</label>
+            <input
+              id="notes"
+              autocomplete="off"
+              placeholder="例如 CEFR B2、佩戴眼镜"
+            />
+          </div>
+        </section>
+
+        <section class="panel reading-setup-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">READING MATERIAL</p>
+              <h2>阅读材料</h2>
+            </div>
+            <label class="file-button" for="textFileInput">导入 .txt</label>
+            <input
+              id="textFileInput"
+              class="hidden"
+              type="file"
+              accept=".txt,text/plain"
+            />
+          </div>
+
+          <div class="field">
+            <label for="readingTitle">文章标题（可选）</label>
+            <input
+              id="readingTitle"
+              autocomplete="off"
+              placeholder="例如 The Future of Online Learning"
+            />
+          </div>
+          <div class="field">
+            <label for="readingText">文章正文</label>
+            <textarea
+              id="readingText"
+              placeholder="在这里粘贴英语阅读材料，或点击右上角导入 .txt 文件。"
+            ></textarea>
+          </div>
+        </section>
+
+        <section class="panel question-setup-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">MULTIPLE CHOICE</p>
+              <h2>阅读选择题</h2>
+            </div>
+            <button id="addQuestionButton" type="button">＋ 添加题目</button>
+          </div>
+          <div id="questionEditorList" class="question-editor-list"></div>
+          <p class="helper">
+            每道题默认四个选项。暂不设置标准答案，只保存测试者的选择。
+          </p>
+        </section>
+
+        <section class="panel confirm-panel">
+          <div>
+            <h2>确认实验内容</h2>
+            <p>
+              确认后文章和题目会锁定。测试者不能编辑，只能上下滚动、选择答案和标记困惑。
+            </p>
+          </div>
+          <button id="confirmContentButton" class="primary" type="button">
+            确认文章和题目
+          </button>
+        </section>
+      </section>
+
+      <section id="confirmedSummary" class="panel confirmed-summary hidden">
+        <div>
+          <p class="eyebrow">CONTENT LOCKED</p>
+          <h2 id="confirmedTitle">内容已确认</h2>
+          <p id="confirmedDetails"></p>
+        </div>
+        <button id="editContentButton" type="button">返回修改</button>
+      </section>
+
+      <section id="readerPanel" class="reader-layout hidden">
+        <section class="panel reader-panel">
+          <div class="reader-toolbar">
+            <div>
+              <p class="eyebrow">READING</p>
+              <h2 id="displayReadingTitle">Reading</h2>
+            </div>
+            <div class="font-controls" aria-label="字号调节">
+              <button id="fontDecreaseButton" type="button">A−</button>
+              <button id="fontIncreaseButton" type="button">A＋</button>
+            </div>
+          </div>
+
+          <div id="readerScrollArea" class="reader-scroll-area">
+            <article id="displayReadingText" class="reading-content"></article>
+            <section id="questionArea" class="question-area">
+              <div class="question-area-heading">
+                <p class="eyebrow">QUESTIONS</p>
+                <h2>阅读题目</h2>
+              </div>
+              <div id="displayQuestionList"></div>
+            </section>
+          </div>
+        </section>
+
+        <aside class="side-stack">
+          <section class="panel camera-panel">
+            <div class="camera-frame">
+              <video id="preview" autoplay muted playsinline></video>
+              <div id="cameraPlaceholder" class="camera-placeholder">
+                点击“开始采集”后显示摄像头
+              </div>
+              <div id="recordingBadge" class="recording-badge hidden">
+                <span></span> REC
+              </div>
+            </div>
+
+            <div class="status-row">
+              <div>
+                <span class="status-label">状态</span>
+                <strong id="statusText">等待开始</strong>
+              </div>
+              <div>
+                <span class="status-label">时长</span>
+                <strong id="timer">00:00.000</strong>
+              </div>
+              <div>
+                <span class="status-label">标注数</span>
+                <strong id="markerCount">0</strong>
+              </div>
+            </div>
+
+            <div class="controls">
+              <button id="startButton" class="primary" disabled>
+                开始采集
+              </button>
+              <button id="markButton" class="mark" disabled>
+                标记困惑（空格）
+              </button>
+              <button id="undoButton" disabled>撤销标注</button>
+              <button id="stopButton" class="danger" disabled>
+                结束并保存
+              </button>
+            </div>
+            <p id="message" class="message" aria-live="polite"></p>
+          </section>
+
+          <section class="panel marker-panel">
+            <div class="marker-heading">
+              <div>
+                <p class="eyebrow">TIMELINE</p>
+                <h2>困惑标注</h2>
+              </div>
+              <span id="sessionLabel">尚未开始</span>
+            </div>
+            <div id="markerFlash" class="marker-flash hidden">
+              已记录困惑标注
+            </div>
+            <ol id="markerList" class="marker-list">
+              <li class="empty">按空格后，时间点会显示在这里。</li>
+            </ol>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
