@@ -7,6 +7,11 @@ const notesInput = $("#notes");
 const readingTitleInput = $("#readingTitle");
 const readingTextInput = $("#readingText");
 const textFileInput = $("#textFileInput");
+const savedMaterialSelect = $("#savedMaterialSelect");
+const loadMaterialButton = $("#loadMaterialButton");
+const deleteMaterialButton = $("#deleteMaterialButton");
+const exportMaterialButton = $("#exportMaterialButton");
+const materialFileInput = $("#materialFileInput");
 const questionEditorList = $("#questionEditorList");
 const addQuestionButton = $("#addQuestionButton");
 const confirmContentButton = $("#confirmContentButton");
@@ -39,7 +44,9 @@ const stopButton = $("#stopButton");
 let mediaStream = null;
 let mediaRecorder = null;
 let chunks = [];
-let markers = [];
+let confusionIntervals = [];
+let activeConfusion = null;
+let activeInputSource = null;
 let sessionId = null;
 let recording = false;
 let contentConfirmed = false;
@@ -50,6 +57,7 @@ let timerHandle = null;
 let flashHandle = null;
 let readingFontSize = 24;
 let questionSerial = 0;
+const MATERIAL_STORAGE_KEY = "confusion_face_collector_materials_v1";
 
 function formatTime(milliseconds) {
   const safe = Math.max(0, Number(milliseconds) || 0);
@@ -70,7 +78,8 @@ function setMessage(text, type = "") {
 function updateControls() {
   startButton.disabled = !contentConfirmed || recording;
   markButton.disabled = !recording;
-  undoButton.disabled = !recording || markers.length === 0;
+  undoButton.disabled =
+    !recording || activeConfusion !== null || confusionIntervals.length === 0;
   stopButton.disabled = !recording;
   editContentButton.disabled = recording;
 }
@@ -87,12 +96,12 @@ function createQuestionEditor(initial = {}) {
   const removeButton = document.createElement("button");
   removeButton.type = "button";
   removeButton.className = "remove-question";
-  removeButton.textContent = "删除";
+  removeButton.textContent = "Delete";
   header.append(label, removeButton);
 
   const questionInput = document.createElement("input");
   questionInput.className = "question-input";
-  questionInput.placeholder = "输入题目";
+  questionInput.placeholder = "Enter the question";
   questionInput.value = initial.text || "";
 
   const optionGrid = document.createElement("div");
@@ -105,7 +114,7 @@ function createQuestionEditor(initial = {}) {
     prefix.textContent = letter;
     const input = document.createElement("input");
     input.className = "option-input";
-    input.placeholder = `选项 ${letter}`;
+    input.placeholder = `Option ${letter}`;
     input.value = initial.options?.[index] || "";
     wrapper.append(prefix, input);
     optionGrid.append(wrapper);
@@ -124,7 +133,7 @@ function createQuestionEditor(initial = {}) {
 function renumberQuestionEditors() {
   [...questionEditorList.querySelectorAll(".question-editor")].forEach(
     (editor, index) => {
-      editor.querySelector("strong").textContent = `第 ${index + 1} 题`;
+      editor.querySelector("strong").textContent = `Question ${index + 1}`;
     }
   );
 }
@@ -146,21 +155,132 @@ function readQuestionsFromEditor() {
 
 function validateContent() {
   if (!subjectIdInput.value.trim() || !readingIdInput.value.trim()) {
-    return "请填写被试编号和阅读任务。";
+    return "Enter the participant ID and reading ID.";
   }
   if (!readingTextInput.value.trim()) {
-    return "请粘贴或导入阅读文章。";
+    return "Paste or import the reading text.";
   }
 
   const questions = readQuestionsFromEditor();
   for (const [index, question] of questions.entries()) {
-    if (!question.text) return `第 ${index + 1} 题缺少题目。`;
+    if (!question.text) return `Question ${index + 1} has no question text.`;
     const filledOptions = question.options.filter(Boolean);
     if (filledOptions.length < 2) {
-      return `第 ${index + 1} 题至少需要两个选项。`;
+      return `Question ${index + 1} needs at least two options.`;
     }
   }
   return "";
+}
+
+function getSavedMaterials() {
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(MATERIAL_STORAGE_KEY) || "[]"
+    );
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function setSavedMaterials(materials) {
+  window.localStorage.setItem(
+    MATERIAL_STORAGE_KEY,
+    JSON.stringify(materials)
+  );
+}
+
+function materialLabel(material) {
+  return material.reading_title || material.reading_id || "Untitled Reading";
+}
+
+function refreshSavedMaterialSelect(selectedId = "") {
+  const materials = getSavedMaterials().sort((a, b) =>
+    materialLabel(a).localeCompare(materialLabel(b))
+  );
+  savedMaterialSelect.replaceChildren();
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Select a locally saved material...";
+  savedMaterialSelect.append(empty);
+
+  for (const material of materials) {
+    const option = document.createElement("option");
+    option.value = material.template_id;
+    option.textContent = `${materialLabel(material)} (${material.questions?.length || 0} questions)`;
+    savedMaterialSelect.append(option);
+  }
+  savedMaterialSelect.value = selectedId;
+  updateTemplateButtons();
+}
+
+function updateTemplateButtons() {
+  const hasSelection = Boolean(savedMaterialSelect.value);
+  loadMaterialButton.disabled = !hasSelection;
+  deleteMaterialButton.disabled = !hasSelection;
+}
+
+function buildMaterialTemplate() {
+  return {
+    schema: "confusion-face-reading-material",
+    version: 1,
+    template_id:
+      confirmedContent?.template_id ||
+      savedMaterialSelect.value ||
+      `material_${Date.now()}`,
+    reading_id: readingIdInput.value.trim(),
+    reading_title: readingTitleInput.value.trim(),
+    reading_text: readingTextInput.value,
+    questions: readQuestionsFromEditor(),
+    updated_at_iso: new Date().toISOString(),
+  };
+}
+
+function saveMaterialTemplate(template) {
+  const materials = getSavedMaterials();
+  const index = materials.findIndex(
+    (item) => item.template_id === template.template_id
+  );
+  if (index >= 0) materials[index] = template;
+  else materials.push(template);
+  setSavedMaterials(materials);
+  refreshSavedMaterialSelect(template.template_id);
+  return template;
+}
+
+function loadMaterialTemplate(template) {
+  readingIdInput.value = template.reading_id || "";
+  readingTitleInput.value = template.reading_title || "";
+  readingTextInput.value = template.reading_text || "";
+  questionEditorList.replaceChildren();
+  questionSerial = 0;
+  const questions = Array.isArray(template.questions)
+    ? template.questions
+    : [];
+  if (questions.length === 0) createQuestionEditor();
+  else questions.forEach((question) => createQuestionEditor(question));
+  savedMaterialSelect.value = template.template_id || "";
+  updateTemplateButtons();
+}
+
+function selectedMaterialTemplate() {
+  return getSavedMaterials().find(
+    (item) => item.template_id === savedMaterialSelect.value
+  );
+}
+
+function downloadJson(filename, value) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function renderReading() {
@@ -191,7 +311,7 @@ function renderQuestions() {
   if (questions.length === 0) {
     const empty = document.createElement("p");
     empty.className = "helper";
-    empty.textContent = "本次阅读没有设置选择题。";
+    empty.textContent = "No questions were configured for this reading.";
     displayQuestionList.append(empty);
     return;
   }
@@ -256,6 +376,8 @@ function confirmContent() {
     reading_text: readingTextInput.value,
     questions: readQuestionsFromEditor(),
   };
+  const savedTemplate = saveMaterialTemplate(buildMaterialTemplate());
+  confirmedContent.template_id = savedTemplate.template_id;
   contentConfirmed = true;
 
   experimentSetup.classList.add("hidden");
@@ -263,10 +385,12 @@ function confirmContent() {
   readerPanel.classList.remove("hidden");
   confirmedTitle.textContent =
     confirmedContent.reading_title || confirmedContent.reading_id;
-  confirmedDetails.textContent = `${confirmedContent.reading_text.length} 个字符，${confirmedContent.questions.length} 道选择题。`;
+  confirmedDetails.textContent = `${confirmedContent.reading_text.length} characters, ${confirmedContent.questions.length} questions. Saved locally as "${materialLabel(savedTemplate)}".`;
   renderReading();
   window.scrollTo({ top: 0, behavior: "instant" });
-  setMessage("内容已锁定。确认摄像头准备好后，点击“开始采集”。");
+  setMessage(
+    'Content is locked. When the camera is ready, click "Start Collection".'
+  );
   updateControls();
 }
 
@@ -281,23 +405,46 @@ function editContent() {
   updateControls();
 }
 
-function renderMarkers() {
-  markerCount.textContent = String(markers.length);
+function elapsedMs(now = performance.now()) {
+  return Math.max(0, Math.round(now - sessionStartPerf));
+}
+
+function renderIntervals() {
+  markerCount.textContent = String(
+    confusionIntervals.length + (activeConfusion ? 1 : 0)
+  );
   markerList.replaceChildren();
-  if (markers.length === 0) {
+  if (confusionIntervals.length === 0 && !activeConfusion) {
     const empty = document.createElement("li");
     empty.className = "empty";
-    empty.textContent = "按空格后，时间点会显示在这里。";
+    empty.textContent = "Hold Space while confused, then release it.";
     markerList.append(empty);
   } else {
-    markers.forEach((marker) => {
+    confusionIntervals.forEach((interval) => {
       const item = document.createElement("li");
-      item.textContent = `标注 ${marker.event_id} · ${formatTime(
-        marker.press_time_ms
-      )}`;
+      item.textContent = `Interval ${interval.event_id} · ${formatTime(
+        interval.start_time_ms
+      )} – ${formatTime(interval.end_time_ms)} (${formatTime(
+        interval.duration_ms
+      )})`;
       markerList.append(item);
     });
+    if (activeConfusion) {
+      const item = document.createElement("li");
+      item.className = "active";
+      item.textContent = `Interval ${activeConfusion.event_id} · ${formatTime(
+        activeConfusion.start_time_ms
+      )} – active`;
+      markerList.append(item);
+    }
     markerList.scrollTop = markerList.scrollHeight;
+  }
+  markButton.classList.toggle("active", Boolean(activeConfusion));
+  markButton.textContent = activeConfusion
+    ? "Confusion Active — Release"
+    : "Hold to Mark Confusion";
+  if (recording) {
+    statusText.textContent = activeConfusion ? "Confused" : "Recording";
   }
   updateControls();
 }
@@ -322,7 +469,7 @@ async function postJson(url, body) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || `请求失败：${response.status}`);
+    throw new Error(payload.error || `Request failed: ${response.status}`);
   }
   return payload;
 }
@@ -331,7 +478,7 @@ async function startCapture() {
   if (!contentConfirmed || !confirmedContent) return;
   startButton.disabled = true;
   editContentButton.disabled = true;
-  setMessage("正在请求摄像头权限……");
+  setMessage("Requesting camera permission...");
 
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -365,8 +512,10 @@ async function startCapture() {
     sessionId = created.session_id;
     sessionLabel.textContent = sessionId;
     chunks = [];
-    markers = [];
-    renderMarkers();
+    confusionIntervals = [];
+    activeConfusion = null;
+    activeInputSource = null;
+    renderIntervals();
 
     const mimeType = chooseMimeType();
     mediaRecorder = new MediaRecorder(mediaStream, {
@@ -381,7 +530,7 @@ async function startCapture() {
       mediaRecorder.addEventListener("start", resolve, { once: true });
       mediaRecorder.addEventListener(
         "error",
-        (event) => reject(event.error || new Error("录像启动失败")),
+        (event) => reject(event.error || new Error("Failed to start recording")),
         { once: true }
       );
       mediaRecorder.start(1000);
@@ -390,10 +539,13 @@ async function startCapture() {
     sessionStartPerf = performance.now();
     captureStartedAtIso = new Date().toISOString();
     recording = true;
+    startButton.blur();
     recordingBadge.classList.remove("hidden");
-    statusText.textContent = "正在录制";
+    statusText.textContent = "Recording";
     timer.textContent = "00:00.000";
-    setMessage("采集已开始。阅读、作答；感觉困惑时按一次空格。");
+    setMessage(
+      "Collection started. Hold Space while confused and release it when the confusion ends."
+    );
     readerScrollArea.scrollTop = 0;
     updateControls();
     timerHandle = window.setInterval(() => {
@@ -404,37 +556,54 @@ async function startCapture() {
     recording = false;
     startButton.disabled = false;
     editContentButton.disabled = false;
-    setMessage(`无法开始采集：${error.message}`, "error");
+    setMessage(`Could not start collection: ${error.message}`, "error");
   }
 }
 
-function addMarker() {
-  if (!recording) return;
-  markers.push({
-    event_id: markers.length + 1,
-    press_time_ms: Math.max(
-      0,
-      Math.round(performance.now() - sessionStartPerf)
-    ),
-    recorded_at_iso: new Date().toISOString(),
-  });
-  renderMarkers();
+function beginConfusion(source = "keyboard_space") {
+  if (!recording || activeConfusion) return;
+  activeConfusion = {
+    event_id: confusionIntervals.length + 1,
+    start_time_ms: elapsedMs(),
+    start_recorded_at_iso: new Date().toISOString(),
+    input_source: source,
+  };
+  activeInputSource = source;
+  markerFlash.textContent = "Confusion interval active";
   markerFlash.classList.remove("hidden");
+  window.clearTimeout(flashHandle);
+  renderIntervals();
+}
+
+function endConfusion(reason = "released", endTimeMs = elapsedMs()) {
+  if (!activeConfusion) return;
+  const safeEndTimeMs = Math.max(activeConfusion.start_time_ms, endTimeMs);
+  confusionIntervals.push({
+    ...activeConfusion,
+    end_time_ms: safeEndTimeMs,
+    duration_ms: safeEndTimeMs - activeConfusion.start_time_ms,
+    end_recorded_at_iso: new Date().toISOString(),
+    end_reason: reason,
+  });
+  activeConfusion = null;
+  activeInputSource = null;
+  markerFlash.textContent = "Confusion interval recorded";
   window.clearTimeout(flashHandle);
   flashHandle = window.setTimeout(
     () => markerFlash.classList.add("hidden"),
-    700
+    900
   );
+  renderIntervals();
 }
 
-function undoMarker() {
-  if (!recording || markers.length === 0) return;
-  markers.pop();
-  markers.forEach((marker, index) => {
-    marker.event_id = index + 1;
+function undoInterval() {
+  if (!recording || activeConfusion || confusionIntervals.length === 0) return;
+  confusionIntervals.pop();
+  confusionIntervals.forEach((interval, index) => {
+    interval.event_id = index + 1;
   });
-  renderMarkers();
-  setMessage("已撤销上一次困惑标注。");
+  renderIntervals();
+  setMessage("The last confusion interval was removed.");
 }
 
 function stopRecorder() {
@@ -446,7 +615,7 @@ function stopRecorder() {
     mediaRecorder.addEventListener("stop", resolve, { once: true });
     mediaRecorder.addEventListener(
       "error",
-      (event) => reject(event.error || new Error("录像停止失败")),
+      (event) => reject(event.error || new Error("Failed to stop recording")),
       { once: true }
     );
     mediaRecorder.stop();
@@ -462,6 +631,9 @@ function stopCameraTracks() {
 async function stopCapture() {
   if (!recording) return;
   const durationMs = Math.round(performance.now() - sessionStartPerf);
+  if (activeConfusion) {
+    endConfusion("collection_stopped", durationMs);
+  }
   const captureEndedAtIso = new Date().toISOString();
   const cameraSettings =
     mediaStream?.getVideoTracks?.()[0]?.getSettings?.() || {};
@@ -471,9 +643,9 @@ async function stopCapture() {
   window.clearInterval(timerHandle);
   timer.textContent = formatTime(durationMs);
   recordingBadge.classList.add("hidden");
-  statusText.textContent = "正在保存";
+  statusText.textContent = "Saving";
   updateControls();
-  setMessage("正在保存视频、标注和题目答案……");
+  setMessage("Saving video, confusion intervals, and answers...");
 
   try {
     await stopRecorder();
@@ -490,13 +662,13 @@ async function stopCapture() {
     );
     const videoPayload = await videoResponse.json().catch(() => ({}));
     if (!videoResponse.ok) {
-      throw new Error(videoPayload.error || "视频上传失败");
+      throw new Error(videoPayload.error || "Video upload failed");
     }
 
     const saved = await postJson(
-      `/api/session/${encodeURIComponent(sessionId)}/markers`,
+      `/api/session/${encodeURIComponent(sessionId)}/intervals`,
       {
-        markers,
+        intervals: confusionIntervals,
         answers,
         capture_started_at_iso: captureStartedAtIso,
         capture_ended_at_iso: captureEndedAtIso,
@@ -505,14 +677,14 @@ async function stopCapture() {
         camera_settings: cameraSettings,
       }
     );
-    statusText.textContent = "保存完成";
+    statusText.textContent = "Saved";
     setMessage(
-      `保存成功：${saved.relative_path}（${markers.length} 个困惑标注）`,
+      `Saved to ${saved.relative_path} (${confusionIntervals.length} confusion intervals).`,
       "success"
     );
   } catch (error) {
-    statusText.textContent = "保存失败";
-    setMessage(`保存失败：${error.message}`, "error");
+    statusText.textContent = "Save failed";
+    setMessage(`Save failed: ${error.message}`, "error");
   } finally {
     stopCameraTracks();
     cameraPlaceholder.classList.remove("hidden");
@@ -520,6 +692,11 @@ async function stopCapture() {
     chunks = [];
     sessionId = null;
     captureStartedAtIso = null;
+    activeConfusion = null;
+    activeInputSource = null;
+    markerFlash.classList.add("hidden");
+    markButton.classList.remove("active");
+    markButton.textContent = "Hold to Mark Confusion";
     startButton.disabled = false;
     editContentButton.disabled = false;
     updateControls();
@@ -530,9 +707,62 @@ addQuestionButton.addEventListener("click", () => createQuestionEditor());
 confirmContentButton.addEventListener("click", confirmContent);
 editContentButton.addEventListener("click", editContent);
 startButton.addEventListener("click", startCapture);
-markButton.addEventListener("click", addMarker);
-undoButton.addEventListener("click", undoMarker);
+markButton.addEventListener("pointerdown", (event) => {
+  if (!recording) return;
+  event.preventDefault();
+  markButton.setPointerCapture?.(event.pointerId);
+  beginConfusion("hold_button");
+});
+markButton.addEventListener("pointerup", (event) => {
+  if (activeInputSource !== "hold_button") return;
+  event.preventDefault();
+  endConfusion("button_released");
+  markButton.blur();
+});
+markButton.addEventListener("pointercancel", () => {
+  if (activeInputSource === "hold_button") {
+    endConfusion("pointer_cancelled");
+  }
+});
+markButton.addEventListener("click", (event) => event.preventDefault());
+undoButton.addEventListener("click", undoInterval);
 stopButton.addEventListener("click", stopCapture);
+
+savedMaterialSelect.addEventListener("change", updateTemplateButtons);
+
+loadMaterialButton.addEventListener("click", () => {
+  const template = selectedMaterialTemplate();
+  if (!template) return;
+  loadMaterialTemplate(template);
+});
+
+deleteMaterialButton.addEventListener("click", () => {
+  const template = selectedMaterialTemplate();
+  if (!template) return;
+  const shouldDelete = window.confirm(
+    `Delete the locally saved material "${materialLabel(template)}"?`
+  );
+  if (!shouldDelete) return;
+  setSavedMaterials(
+    getSavedMaterials().filter(
+      (item) => item.template_id !== template.template_id
+    )
+  );
+  refreshSavedMaterialSelect();
+});
+
+exportMaterialButton.addEventListener("click", () => {
+  const error = validateContent();
+  if (error) {
+    window.alert(error);
+    return;
+  }
+  const template = buildMaterialTemplate();
+  const safeName = (materialLabel(template) || "reading-material")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  downloadJson(`${safeName || "reading-material"}.json`, template);
+});
 
 textFileInput.addEventListener("change", async () => {
   const file = textFileInput.files?.[0];
@@ -542,6 +772,38 @@ textFileInput.addEventListener("change", async () => {
     readingTitleInput.value = file.name.replace(/\.[^.]+$/, "");
   }
   textFileInput.value = "";
+});
+
+materialFileInput.addEventListener("change", async () => {
+  const file = materialFileInput.files?.[0];
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    const candidates = Array.isArray(parsed) ? parsed : [parsed];
+    let imported = null;
+    for (const candidate of candidates) {
+      if (
+        !candidate ||
+        typeof candidate.reading_text !== "string" ||
+        !Array.isArray(candidate.questions)
+      ) {
+        throw new Error("The JSON file is not a valid reading material.");
+      }
+      const template = {
+        ...candidate,
+        schema: "confusion-face-reading-material",
+        version: 1,
+        template_id: candidate.template_id || `material_${Date.now()}`,
+        updated_at_iso: new Date().toISOString(),
+      };
+      imported = saveMaterialTemplate(template);
+    }
+    if (imported) loadMaterialTemplate(imported);
+  } catch (error) {
+    window.alert(`Import failed: ${error.message}`);
+  } finally {
+    materialFileInput.value = "";
+  }
 });
 
 fontDecreaseButton.addEventListener("click", () => {
@@ -561,7 +823,19 @@ window.addEventListener("keydown", (event) => {
   );
   if (interactive) return;
   event.preventDefault();
-  addMarker();
+  beginConfusion("keyboard_space");
+});
+
+window.addEventListener("keyup", (event) => {
+  if (event.code !== "Space" || activeInputSource !== "keyboard_space") return;
+  event.preventDefault();
+  endConfusion("space_released");
+});
+
+window.addEventListener("blur", () => {
+  if (recording && activeConfusion) {
+    endConfusion("window_blurred");
+  }
 });
 
 window.addEventListener("beforeunload", (event) => {
@@ -571,5 +845,6 @@ window.addEventListener("beforeunload", (event) => {
 });
 
 createQuestionEditor();
-renderMarkers();
+renderIntervals();
+refreshSavedMaterialSelect();
 updateControls();

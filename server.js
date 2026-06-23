@@ -66,7 +66,7 @@ function readJson(req, maxBytes = 1024 * 1024) {
     req.on("data", (chunk) => {
       total += chunk.length;
       if (total > maxBytes) {
-        reject(new Error("请求数据过大"));
+        reject(new Error("Request body is too large"));
         req.destroy();
         return;
       }
@@ -78,7 +78,7 @@ function readJson(req, maxBytes = 1024 * 1024) {
         const text = Buffer.concat(chunks).toString("utf8");
         resolve(text ? JSON.parse(text) : {});
       } catch {
-        reject(new Error("JSON 格式无效"));
+        reject(new Error("Invalid JSON"));
       }
     });
 
@@ -95,13 +95,27 @@ function csvEscape(value) {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-function writeMarkersCsv(filePath, markers) {
+function writeIntervalsCsv(filePath, intervals) {
   const rows = [
-    ["event_id", "press_time_ms", "recorded_at_iso"],
-    ...markers.map((marker) => [
-      marker.event_id,
-      marker.press_time_ms,
-      marker.recorded_at_iso,
+    [
+      "event_id",
+      "start_time_ms",
+      "end_time_ms",
+      "duration_ms",
+      "start_recorded_at_iso",
+      "end_recorded_at_iso",
+      "input_source",
+      "end_reason",
+    ],
+    ...intervals.map((interval) => [
+      interval.event_id,
+      interval.start_time_ms,
+      interval.end_time_ms,
+      interval.duration_ms,
+      interval.start_recorded_at_iso,
+      interval.end_recorded_at_iso,
+      interval.input_source,
+      interval.end_reason,
     ]),
   ];
   fs.writeFileSync(
@@ -113,12 +127,12 @@ function writeMarkersCsv(filePath, markers) {
 
 function getSessionDir(sessionId) {
   if (!isValidSessionId(sessionId)) {
-    throw new Error("会话 ID 无效");
+    throw new Error("Invalid session ID");
   }
   const sessionDir = path.resolve(DATA_DIR, sessionId);
   const dataRoot = `${path.resolve(DATA_DIR)}${path.sep}`;
   if (!`${sessionDir}${path.sep}`.startsWith(dataRoot)) {
-    throw new Error("会话路径无效");
+    throw new Error("Invalid session path");
   }
   return sessionDir;
 }
@@ -146,6 +160,7 @@ async function handleApi(req, res, pathname) {
         notes: String(body.notes || "").trim(),
         server_created_at_iso: new Date().toISOString(),
         requested_capture: body.requested_capture || {},
+        labeling_mode: "hold_space_confusion_interval",
         user_agent: String(body.user_agent || ""),
         status: "recording",
       });
@@ -168,7 +183,7 @@ async function handleApi(req, res, pathname) {
     try {
       sessionDir = getSessionDir(decodeURIComponent(videoMatch[1]));
       if (!fs.existsSync(sessionDir)) {
-        throw new Error("会话不存在");
+        throw new Error("Session does not exist");
       }
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -209,27 +224,48 @@ async function handleApi(req, res, pathname) {
     output.on("error", (error) => {
       cleanup();
       if (!res.headersSent) {
-        sendJson(res, 500, { error: `视频保存失败：${error.message}` });
+        sendJson(res, 500, { error: `Failed to save video: ${error.message}` });
       }
     });
     return;
   }
 
-  const markersMatch = pathname.match(
-    /^\/api\/session\/([^/]+)\/markers$/
+  const intervalsMatch = pathname.match(
+    /^\/api\/session\/([^/]+)\/intervals$/
   );
-  if (req.method === "POST" && markersMatch) {
+  if (req.method === "POST" && intervalsMatch) {
     try {
-      const sessionId = decodeURIComponent(markersMatch[1]);
+      const sessionId = decodeURIComponent(intervalsMatch[1]);
       const sessionDir = getSessionDir(sessionId);
       if (!fs.existsSync(sessionDir)) {
-        throw new Error("会话不存在");
+        throw new Error("Session does not exist");
       }
 
       const body = await readJson(req, 2 * 1024 * 1024);
-      const markers = Array.isArray(body.markers) ? body.markers : [];
-      writeJson(path.join(sessionDir, "markers.json"), markers);
-      writeMarkersCsv(path.join(sessionDir, "markers.csv"), markers);
+      const intervals = Array.isArray(body.intervals) ? body.intervals : [];
+      const invalidInterval = intervals.find(
+        (interval) =>
+          !Number.isFinite(interval.start_time_ms) ||
+          !Number.isFinite(interval.end_time_ms) ||
+          interval.start_time_ms < 0 ||
+          interval.end_time_ms < interval.start_time_ms
+      );
+      if (invalidInterval) {
+        throw new Error("Invalid confusion interval");
+      }
+      const validatedIntervals = intervals.map((interval, index) => ({
+        ...interval,
+        event_id: index + 1,
+        duration_ms: interval.end_time_ms - interval.start_time_ms,
+      }));
+      writeJson(
+        path.join(sessionDir, "confusion_intervals.json"),
+        validatedIntervals
+      );
+      writeIntervalsCsv(
+        path.join(sessionDir, "confusion_intervals.csv"),
+        validatedIntervals
+      );
 
       const metadataPath = path.join(sessionDir, "metadata.json");
       const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
@@ -240,7 +276,13 @@ async function handleApi(req, res, pathname) {
         recording_mime_type: body.recording_mime_type,
         camera_settings: body.camera_settings || {},
         answers: Array.isArray(body.answers) ? body.answers : [],
-        marker_count: markers.length,
+        interval_count: validatedIntervals.length,
+        label_schema: {
+          type: "confusion_intervals",
+          start_field: "start_time_ms",
+          end_field: "end_time_ms",
+          time_origin: "recording_start",
+        },
         status: "completed",
         server_completed_at_iso: new Date().toISOString(),
       });
@@ -248,7 +290,7 @@ async function handleApi(req, res, pathname) {
 
       sendJson(res, 201, {
         saved: true,
-        marker_count: markers.length,
+        interval_count: validatedIntervals.length,
         relative_path: `data/${sessionId}`,
       });
     } catch (error) {
@@ -257,7 +299,7 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
-  sendJson(res, 404, { error: "接口不存在" });
+  sendJson(res, 404, { error: "API endpoint not found" });
 }
 
 function serveStatic(res, pathname) {
@@ -317,7 +359,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`困惑标注采集器已启动：http://${HOST}:${PORT}`);
-  console.log(`数据保存目录：${DATA_DIR}`);
-  console.log("按 Ctrl+C 可停止服务。");
+  console.log(`Facial Confusion Data Collector: http://${HOST}:${PORT}`);
+  console.log(`Data directory: ${DATA_DIR}`);
+  console.log("Press Ctrl+C to stop the server.");
 });

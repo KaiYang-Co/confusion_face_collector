@@ -1,81 +1,115 @@
-# 面部困惑数据采集器
+# Facial Confusion Data Collector
 
-这是一个仅用于 Face-only 困惑模型训练数据采集的本地工具。
+This is a local, face-only data collection tool for training a confusion
+detection model. It records:
 
-它会同时完成：
+- webcam video without audio;
+- confusion intervals marked by holding and releasing Space;
+- the reading material and multiple-choice questions;
+- participant answers and session metadata.
 
-- 摄像头面部录像；
-- 空格键困惑时间点记录；
-- 输入或导入并展示阅读材料；
-- 编辑多道四选一阅读题并保存测试者答案；
-- 会话元数据保存。
+Tobii eye tracking is not required. The user interface and exported
+documentation are in English.
 
-Tobii 不参与当前训练采集。
+## Start
 
-## 启动
-
-双击 `start.cmd`。
-
-浏览器会打开：
+Double-click `start.cmd`. The browser opens:
 
 ```text
 http://127.0.0.1:8765
 ```
 
-首次使用时允许浏览器访问摄像头。
+Allow camera access when prompted. If the page opens before the local server is
+ready, wait one second and refresh it.
 
-如果浏览器先于服务启动而显示无法访问，等待一秒后刷新页面。
+## Collection procedure
 
-## 使用
+1. Enter the participant ID and reading ID.
+2. Paste the reading text or import a `.txt` file.
+3. Add any multiple-choice questions.
+4. Select **Confirm Reading and Questions**.
+5. Select **Start Collection**.
+6. The participant reads and answers the questions.
+7. The participant holds Space for the full period in which they feel
+   confused, then releases Space when the confusion ends.
+8. Select **Stop and Save**.
 
-1. 研究者填写被试编号和阅读任务。
-2. 粘贴文章正文，或导入 `.txt` 文件。
-3. 添加阅读选择题。
-4. 点击“确认文章和题目”，内容会切换为只读。
-5. 点击“开始采集”。
-6. 测试者只能滚动阅读、选择答案，并在感觉困惑时按一次空格。
-7. 如果误按，可点击“撤销标注”。
-8. 点击“结束并保存”。
+The **Hold to Mark Confusion** button provides the same press-and-hold behavior
+for mouse or touch input. **Undo Last Interval** removes the latest completed
+interval.
 
-## 数据目录
+## Output directory
 
-每次采集会在 `data` 下建立独立文件夹：
+Each collection creates one directory under `data`:
 
 ```text
 data/
 └─ S01_Text01_20260623_153012_ab12/
    ├─ face.webm
-   ├─ markers.csv
-   ├─ markers.json
+   ├─ confusion_intervals.csv
+   ├─ confusion_intervals.json
    └─ metadata.json
 ```
 
-文章标题和正文保存在 `metadata.json` 的 `reading_title` 和
-`reading_text` 字段中。题目保存在 `questions` 字段，测试者答案保存在
-`answers` 字段。
+The browser may produce `face.mp4` instead of `face.webm` if MP4 recording is
+supported and selected.
 
-`markers.csv` 示例：
+## Confusion interval schema
+
+Example `confusion_intervals.csv`:
 
 ```csv
-event_id,press_time_ms,recorded_at_iso
-1,15342,2026-06-23T06:30:15.342Z
-2,38651,2026-06-23T06:30:38.651Z
+event_id,start_time_ms,end_time_ms,duration_ms,start_recorded_at_iso,end_recorded_at_iso,input_source,end_reason
+1,14200,15840,1640,2026-06-23T06:30:14.200Z,2026-06-23T06:30:15.840Z,keyboard_space,space_released
+2,38600,40110,1510,2026-06-23T06:30:38.600Z,2026-06-23T06:30:40.110Z,keyboard_space,space_released
 ```
 
-`press_time_ms` 是相对于本次录像开始的毫秒数。
+`start_time_ms` and `end_time_ms` are measured from the start of the video
+recording using `performance.now()`.
 
-## 注意
+Possible `input_source` values:
 
-- 结束采集前不要关闭浏览器页面。
-- 空格键仅记录“测试者此刻报告困惑”，不是困惑开始的精确时间。
-- 训练切片时应在按键之前搜索候选正样本区间。
-- 视频默认不录音。
-- 浏览器预览为镜像显示，但保存的视频由摄像头原始视频流决定。
+- `keyboard_space`
+- `hold_button`
 
-## 技术结构
+Possible `end_reason` values:
 
-- 前端：原生 HTML、CSS、JavaScript
-- 录像：浏览器 MediaRecorder
-- 时间戳：performance.now()
-- 保存服务：Node.js 内置模块
-- 第三方依赖：无
+- `space_released`
+- `button_released`
+- `collection_stopped`
+- `window_blurred`
+- `pointer_cancelled`
+
+If collection stops or the browser loses focus during an active interval, the
+collector closes that interval automatically and records the reason.
+
+## Reading material templates
+
+Confirmed reading materials are stored in the browser's local storage.
+
+- **Load** restores a selected local template.
+- **Delete** removes it from local storage.
+- **Export JSON** saves it as a transferable file.
+- **Import JSON** loads a previously exported template.
+
+Export templates before changing browser, changing computer, or clearing
+browser data.
+
+## Notes
+
+- Do not close the page before selecting **Stop and Save**.
+- The saved video contains no audio.
+- The preview is mirrored for the participant; the saved stream follows the
+  camera's original output.
+- Holding Space produces a stronger interval label than a single keypress, but
+  human recognition and motor-response latency can still shift the reported
+  interval relative to the earliest facial evidence of confusion.
+- Keep train, validation, and test data separated by participant ID.
+
+## Technical structure
+
+- Front end: plain HTML, CSS, and JavaScript
+- Recording: browser `MediaRecorder`
+- Relative timestamps: `performance.now()`
+- Local service: Node.js built-in modules
+- Third-party dependencies: none

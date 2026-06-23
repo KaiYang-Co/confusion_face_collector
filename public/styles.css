@@ -149,6 +149,41 @@ h2 {
   font-weight: 750;
 }
 
+.heading-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.template-tools {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) repeat(4, auto);
+  gap: 8px;
+  align-items: end;
+  border: 1px solid #dce4e9;
+  border-radius: 12px;
+  padding: 12px;
+  background: #f7f9fb;
+}
+
+.template-tools select {
+  width: 100%;
+  min-height: 41px;
+  border: 1px solid #ccd5dd;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: white;
+}
+
+.template-tools .file-button {
+  justify-content: center;
+  min-height: 41px;
+}
+
+.compact-helper {
+  margin: -4px 2px 2px;
+  font-size: 12px;
+}
+
 .question-editor-list {
   display: grid;
   gap: 13px;
@@ -433,6 +468,14 @@ button:disabled {
 .mark {
   color: #352600;
   background: #f5c451;
+  user-select: none;
+  touch-action: none;
+}
+
+.mark.active {
+  color: white;
+  background: #d56a35;
+  box-shadow: 0 0 0 4px rgba(213, 106, 53, 0.18);
 }
 
 .danger {
@@ -501,6 +544,12 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.marker-list li.active {
+  color: #8a3c1f;
+  background: #fff0e7;
+  font-weight: 750;
+}
+
 .marker-list .empty {
   color: #87939d;
   background: transparent;
@@ -524,6 +573,14 @@ button:disabled {
     height: 70vh;
     min-height: 500px;
   }
+
+  .template-tools {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .template-select-field {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 700px) {
@@ -538,6 +595,14 @@ button:disabled {
   .confirmed-summary {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .template-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .template-select-field {
+    grid-column: auto;
   }
 
   .reader-scroll-area {
