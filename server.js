@@ -8,8 +8,10 @@ const PORT = Number(process.env.PORT || 8765);
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DATA_DIR = path.join(ROOT, "data");
+const MATERIALS_DIR = path.join(ROOT, "materials");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(MATERIALS_DIR, { recursive: true });
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -42,6 +44,10 @@ function sanitizePart(value, fallback) {
 
 function isValidSessionId(value) {
   return /^[a-zA-Z0-9\u4e00-\u9fff_-]{1,140}$/.test(value);
+}
+
+function isValidTemplateId(value) {
+  return /^[a-zA-Z0-9_-]{1,100}$/.test(value);
 }
 
 function createSessionId(subjectId, readingId) {
@@ -140,6 +146,81 @@ function getSessionDir(sessionId) {
 async function handleApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/health") {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/materials") {
+    try {
+      const materials = fs
+        .readdirSync(MATERIALS_DIR, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+        .map((entry) => {
+          try {
+            return JSON.parse(
+              fs.readFileSync(path.join(MATERIALS_DIR, entry.name), "utf8")
+            );
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+      sendJson(res, 200, { materials });
+    } catch (error) {
+      sendJson(res, 500, { error: `Failed to load materials: ${error.message}` });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/materials") {
+    try {
+      const body = await readJson(req, 5 * 1024 * 1024);
+      if (typeof body.reading_text !== "string") {
+        throw new Error("Reading text is required");
+      }
+      if (!Array.isArray(body.questions)) {
+        throw new Error("Questions must be an array");
+      }
+
+      const templateId = isValidTemplateId(body.template_id)
+        ? body.template_id
+        : `material_${Date.now()}_${crypto.randomBytes(2).toString("hex")}`;
+      const material = {
+        schema: "confusion-face-reading-material",
+        version: 1,
+        template_id: templateId,
+        reading_id: String(body.reading_id || "").trim(),
+        reading_title: String(body.reading_title || "").trim(),
+        reading_text: body.reading_text,
+        questions: body.questions,
+        updated_at_iso: new Date().toISOString(),
+      };
+      writeJson(path.join(MATERIALS_DIR, `${templateId}.json`), material);
+      sendJson(res, 201, {
+        material,
+        relative_path: `materials/${templateId}.json`,
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const materialMatch = pathname.match(/^\/api\/materials\/([^/]+)$/);
+  if (req.method === "DELETE" && materialMatch) {
+    try {
+      const templateId = decodeURIComponent(materialMatch[1]);
+      if (!isValidTemplateId(templateId)) {
+        throw new Error("Invalid material ID");
+      }
+      const materialPath = path.join(MATERIALS_DIR, `${templateId}.json`);
+      if (!fs.existsSync(materialPath)) {
+        throw new Error("Material does not exist");
+      }
+      fs.rmSync(materialPath);
+      sendJson(res, 200, { deleted: true, template_id: templateId });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
     return;
   }
 
@@ -361,5 +442,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Facial Confusion Data Collector: http://${HOST}:${PORT}`);
   console.log(`Data directory: ${DATA_DIR}`);
+  console.log(`Materials directory: ${MATERIALS_DIR}`);
   console.log("Press Ctrl+C to stop the server.");
 });

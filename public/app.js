@@ -57,7 +57,8 @@ let timerHandle = null;
 let flashHandle = null;
 let readingFontSize = 24;
 let questionSerial = 0;
-const MATERIAL_STORAGE_KEY = "confusion_face_collector_materials_v1";
+let savedMaterials = [];
+const LEGACY_MATERIAL_STORAGE_KEY = "confusion_face_collector_materials_v1";
 
 function formatTime(milliseconds) {
   const safe = Math.max(0, Number(milliseconds) || 0);
@@ -172,10 +173,10 @@ function validateContent() {
   return "";
 }
 
-function getSavedMaterials() {
+function getLegacySavedMaterials() {
   try {
     const value = JSON.parse(
-      window.localStorage.getItem(MATERIAL_STORAGE_KEY) || "[]"
+      window.localStorage.getItem(LEGACY_MATERIAL_STORAGE_KEY) || "[]"
     );
     return Array.isArray(value) ? value : [];
   } catch {
@@ -183,19 +184,12 @@ function getSavedMaterials() {
   }
 }
 
-function setSavedMaterials(materials) {
-  window.localStorage.setItem(
-    MATERIAL_STORAGE_KEY,
-    JSON.stringify(materials)
-  );
-}
-
 function materialLabel(material) {
   return material.reading_title || material.reading_id || "Untitled Reading";
 }
 
-function refreshSavedMaterialSelect(selectedId = "") {
-  const materials = getSavedMaterials().sort((a, b) =>
+function renderSavedMaterialSelect(selectedId = "") {
+  const materials = [...savedMaterials].sort((a, b) =>
     materialLabel(a).localeCompare(materialLabel(b))
   );
   savedMaterialSelect.replaceChildren();
@@ -212,6 +206,50 @@ function refreshSavedMaterialSelect(selectedId = "") {
   }
   savedMaterialSelect.value = selectedId;
   updateTemplateButtons();
+}
+
+async function refreshSavedMaterialSelect(selectedId = "") {
+  const response = await fetch("/api/materials");
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "Failed to load saved materials");
+  }
+  savedMaterials = Array.isArray(payload.materials) ? payload.materials : [];
+  renderSavedMaterialSelect(selectedId);
+}
+
+async function migrateBrowserMaterials() {
+  const legacyMaterials = getLegacySavedMaterials();
+  if (legacyMaterials.length === 0) return false;
+
+  for (const material of legacyMaterials) {
+    if (
+      material &&
+      typeof material.reading_text === "string" &&
+      Array.isArray(material.questions)
+    ) {
+      await postJson("/api/materials", material);
+    }
+  }
+  window.localStorage.removeItem(LEGACY_MATERIAL_STORAGE_KEY);
+  return true;
+}
+
+async function initializeSavedMaterials() {
+  try {
+    const migrated = await migrateBrowserMaterials();
+    await refreshSavedMaterialSelect();
+    if (migrated) {
+      setMessage(
+        "Existing browser-saved materials were moved to the local materials folder.",
+        "success"
+      );
+    }
+  } catch (error) {
+    savedMaterials = [];
+    renderSavedMaterialSelect();
+    setMessage(`Could not load local materials: ${error.message}`, "error");
+  }
 }
 
 function updateTemplateButtons() {
@@ -236,16 +274,31 @@ function buildMaterialTemplate() {
   };
 }
 
-function saveMaterialTemplate(template) {
-  const materials = getSavedMaterials();
-  const index = materials.findIndex(
-    (item) => item.template_id === template.template_id
+async function saveMaterialTemplate(template) {
+  const saved = await postJson("/api/materials", template);
+  const savedTemplate = saved.material;
+  const index = savedMaterials.findIndex(
+    (item) => item.template_id === savedTemplate.template_id
   );
-  if (index >= 0) materials[index] = template;
-  else materials.push(template);
-  setSavedMaterials(materials);
-  refreshSavedMaterialSelect(template.template_id);
-  return template;
+  if (index >= 0) savedMaterials[index] = savedTemplate;
+  else savedMaterials.push(savedTemplate);
+  renderSavedMaterialSelect(savedTemplate.template_id);
+  return savedTemplate;
+}
+
+async function deleteMaterialTemplate(templateId) {
+  const response = await fetch(
+    `/api/materials/${encodeURIComponent(templateId)}`,
+    { method: "DELETE" }
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "Failed to delete material");
+  }
+  savedMaterials = savedMaterials.filter(
+    (item) => item.template_id !== templateId
+  );
+  renderSavedMaterialSelect();
 }
 
 function loadMaterialTemplate(template) {
@@ -264,7 +317,7 @@ function loadMaterialTemplate(template) {
 }
 
 function selectedMaterialTemplate() {
-  return getSavedMaterials().find(
+  return savedMaterials.find(
     (item) => item.template_id === savedMaterialSelect.value
   );
 }
@@ -361,7 +414,7 @@ function collectAnswers() {
   });
 }
 
-function confirmContent() {
+async function confirmContent() {
   const error = validateContent();
   if (error) {
     window.alert(error);
@@ -376,7 +429,17 @@ function confirmContent() {
     reading_text: readingTextInput.value,
     questions: readQuestionsFromEditor(),
   };
-  const savedTemplate = saveMaterialTemplate(buildMaterialTemplate());
+  confirmContentButton.disabled = true;
+  let savedTemplate;
+  try {
+    savedTemplate = await saveMaterialTemplate(buildMaterialTemplate());
+  } catch (saveError) {
+    confirmedContent = null;
+    window.alert(`Could not save the reading locally: ${saveError.message}`);
+    return;
+  } finally {
+    confirmContentButton.disabled = false;
+  }
   confirmedContent.template_id = savedTemplate.template_id;
   contentConfirmed = true;
 
@@ -736,19 +799,21 @@ loadMaterialButton.addEventListener("click", () => {
   loadMaterialTemplate(template);
 });
 
-deleteMaterialButton.addEventListener("click", () => {
+deleteMaterialButton.addEventListener("click", async () => {
   const template = selectedMaterialTemplate();
   if (!template) return;
   const shouldDelete = window.confirm(
     `Delete the locally saved material "${materialLabel(template)}"?`
   );
   if (!shouldDelete) return;
-  setSavedMaterials(
-    getSavedMaterials().filter(
-      (item) => item.template_id !== template.template_id
-    )
-  );
-  refreshSavedMaterialSelect();
+  deleteMaterialButton.disabled = true;
+  try {
+    await deleteMaterialTemplate(template.template_id);
+  } catch (error) {
+    window.alert(`Delete failed: ${error.message}`);
+  } finally {
+    updateTemplateButtons();
+  }
 });
 
 exportMaterialButton.addEventListener("click", () => {
@@ -796,7 +861,7 @@ materialFileInput.addEventListener("change", async () => {
         template_id: candidate.template_id || `material_${Date.now()}`,
         updated_at_iso: new Date().toISOString(),
       };
-      imported = saveMaterialTemplate(template);
+      imported = await saveMaterialTemplate(template);
     }
     if (imported) loadMaterialTemplate(imported);
   } catch (error) {
@@ -847,5 +912,5 @@ window.addEventListener("beforeunload", (event) => {
 
 createQuestionEditor();
 renderIntervals();
-refreshSavedMaterialSelect();
+initializeSavedMaterials();
 updateControls();

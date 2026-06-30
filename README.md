@@ -85,15 +85,17 @@ collector closes that interval automatically and records the reason.
 
 ## Reading material templates
 
-Confirmed reading materials are stored in the browser's local storage.
+Confirmed reading materials are stored as JSON files under `materials/`.
+This runtime directory is excluded from Git.
 
-- **Load** restores a selected local template.
-- **Delete** removes it from local storage.
+- **Load** restores a selected local template from `materials/`.
+- **Delete** removes its JSON file from `materials/`.
 - **Export JSON** saves it as a transferable file.
-- **Import JSON** loads a previously exported template.
+- **Import JSON** loads a previously exported template and copies it into
+  `materials/`.
 
-Export templates before changing browser, changing computer, or clearing
-browser data.
+Templates saved by an older version in browser storage are automatically moved
+to `materials/` the first time this version starts.
 
 ## Notes
 
