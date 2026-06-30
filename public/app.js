@@ -817,12 +817,13 @@ fontIncreaseButton.addEventListener("click", () => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (!recording || event.code !== "Space" || event.repeat) return;
+  if (!recording || event.code !== "Space") return;
   const interactive = event.target.closest?.(
     "input, textarea, button, label"
   );
   if (interactive) return;
   event.preventDefault();
+  if (event.repeat) return;
   beginConfusion("keyboard_space");
 });
 
