@@ -3,7 +3,9 @@ data/*
 !data/.gitkeep
 
 # Locally saved reading materials
-materials/
+materials/*
+!materials/material_1782805558558.json
+!materials/material_1783218613131.json
 
 # Node dependencies and package-manager caches
 node_modules/
