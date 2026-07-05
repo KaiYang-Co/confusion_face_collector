@@ -13,10 +13,22 @@ documentation are in English.
 
 ## Start
 
+### Windows
+
 Double-click `start.cmd`. The browser opens:
 
 ```text
 http://127.0.0.1:8765
+```
+
+### macOS
+
+Make sure Node.js is installed, open Terminal in the project directory, and
+run:
+
+```bash
+open "http://127.0.0.1:8765"
+node server.js
 ```
 
 Allow camera access when prompted. If the page opens before the local server is
