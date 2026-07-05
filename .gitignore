@@ -6,6 +6,7 @@ data/*
 materials/*
 !materials/material_1782805558558.json
 !materials/material_1783218613131.json
+!materials/material_1783263666891.json
 
 # Node dependencies and package-manager caches
 node_modules/
